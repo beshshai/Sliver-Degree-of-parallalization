@@ -1,0 +1,21 @@
+{
+  "name": "jute-sliver-analyzer",
+  "version": "1.0.0",
+  "description": "Multi-user jute sliver fiber parallelization analyzer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "chart.js": "^4.4.4",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.5",
+    "uuid": "^14.0.0"
+  }
+}

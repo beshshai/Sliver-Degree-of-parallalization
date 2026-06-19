@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Report — Jute sliver analyzer</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-top: 0.5rem;
+  }
+  .stat-box {
+    background: #faf9f6; border: 1px solid #e4e1d9; border-radius: 8px;
+    padding: 0.85rem 1rem;
+  }
+  .stat-box .stat-value { font-size: 22px; font-weight: 600; }
+  .stat-box .stat-label { font-size: 12px; color: #6b6a64; margin-top: 2px; }
+
+  .viz-row { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+  .viz-col { flex: 1; min-width: 260px; }
+  .viz-col h3 { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .viz-col p.viz-note { font-size: 12px; color: #6b6a64; margin-top: 6px; }
+
+  .back-link { font-size: 13px; margin-bottom: 0.75rem; display: inline-block; }
+</style>
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+
+  <div class="page">
+    <a href="#" id="backLink" class="back-link">&larr; Back</a>
+
+    <div id="reportHeader">
+      <h1 class="page-title"><span class="spinner"></span>Loading report...</h1>
+    </div>
+
+    <div id="reportBody"></div>
+  </div>
+
+  <script src="/shared.js?v=2"></script>
+  <script>
+    function getQueryParam(name) {
+      return new URLSearchParams(window.location.search).get(name);
+    }
+
+    function statBox(value, label) {
+      return `<div class="stat-box"><div class="stat-value">${value}</div><div class="stat-label">${label}</div></div>`;
+    }
+
+    async function loadReport() {
+      const type = getQueryParam('type');
+      const id = getQueryParam('id');
+      const header = document.getElementById('reportHeader');
+      const body = document.getElementById('reportBody');
+      const backLink = document.getElementById('backLink');
+
+      if (!type || !id || (type !== 'user' && type !== 'batch')) {
+        header.innerHTML = '<h1 class="page-title">Report not found</h1>';
+        body.innerHTML = '<div class="card"><div class="empty-state">Missing or invalid report parameters.</div></div>';
+        return;
+      }
+
+      backLink.href = type === 'batch' ? '/batches' : '/trends';
+
+      const res = await fetch(`/api/reports/${type}/${encodeURIComponent(id)}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        header.innerHTML = '<h1 class="page-title">Report not found</h1>';
+        body.innerHTML = `<div class="card"><div class="empty-state">${escapeHtml(data.error || 'Could not load this report.')}</div></div>`;
+        return;
+      }
+
+      const { subject, stats, samples } = data;
+
+      header.innerHTML = `
+        <h1 class="page-title">${type === 'user' ? 'Individual report' : 'Batch report'} — ${escapeHtml(subject.name)}</h1>
+        <p class="page-sub">
+          ${type === 'user'
+            ? 'Aggregate statistics across all samples uploaded by this person.'
+            : `Aggregate statistics for this batch${subject.ownerName ? ' · created by ' + escapeHtml(subject.ownerName) : ''}.`}
+          ${subject.notes ? ' · ' + escapeHtml(subject.notes) : ''}
+        </p>
+      `;
+
+      if (!stats.sampleCount) {
+        body.innerHTML = '<div class="card"><div class="empty-state">No samples yet — nothing to report on.</div></div>';
+        return;
+      }
+
+      body.innerHTML = `
+        <div class="card">
+          <h2 style="font-size:15px;font-weight:600;margin-bottom:4px;">Summary</h2>
+          <div class="stat-grid">
+            ${statBox(stats.sampleCount, 'Samples')}
+            ${statBox(stats.avgScore, 'Avg score')}
+            ${statBox(stats.minScore, 'Min score')}
+            ${statBox(stats.maxScore, 'Max score')}
+            ${statBox(stats.avgMeanAngle + '°', 'Avg mean angle')}
+            ${statBox(stats.avgAngularStdDev + '°', 'Avg angular std dev')}
+            ${statBox(stats.avgCircularVariance, 'Avg circular variance')}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="viz-row">
+            <div class="viz-col">
+              <h3>Combined fiber orientation</h3>
+              <canvas class="viz-canvas" id="histCanvas"></canvas>
+              <p class="viz-note">Aggregate orientation histogram across all samples (weighted by edge pixel count). The orange line marks the overall average angle.</p>
+            </div>
+            <div class="viz-col">
+              <h3>Score distribution</h3>
+              <canvas class="viz-canvas" id="distCanvas" style="background:#faf9f6;"></canvas>
+              <p class="viz-note">How many samples landed in each quality band (Good ≥75, Moderate ≥50, Poor &lt;50).</p>
+            </div>
+          </div>
+        </div>
+
+        <h1 class="page-title" style="margin-top:1.5rem;">Samples (${samples.length})</h1>
+        <div class="card" id="sampleListCard">
+          <div id="sampleList"></div>
+        </div>
+      `;
+
+      drawHistogramCanvas(document.getElementById('histCanvas'), stats.histogram, stats.avgMeanAngle);
+      drawScoreDistributionCanvas(document.getElementById('distCanvas'), stats.scoreDistribution);
+
+      const sampleList = document.getElementById('sampleList');
+      if (!samples.length) {
+        sampleList.innerHTML = '<div class="empty-state">No samples yet.</div>';
+      } else {
+        sampleList.innerHTML = '';
+        samples.forEach(s => {
+          const badge = scoreBadgeClass(s.score);
+          const color = scoreColor(s.score);
+          const row = document.createElement('div');
+          row.className = 'result-row';
+          row.innerHTML = `
+            <img class="thumb" src="${s.image_path}" alt="sample from ${escapeHtml(s.user_name)}">
+            <div class="result-meta">
+              <div class="result-meta-top">
+                <span class="uploader">${escapeHtml(s.user_name)}</span>
+                <span class="badge ${badge.cls}">${badge.label} · ${s.score}/100</span>
+              </div>
+              <div class="score-bar-bg"><div class="score-bar-fill" style="width:${s.score}%; background:${color};"></div></div>
+              <div class="result-metrics">
+                Mean angle ${s.mean_angle_deg}° · std dev ${s.angular_stddev_deg}° · ${s.width}×${s.height}px
+                ${s.notes ? ' · ' + escapeHtml(s.notes) : ''}
+              </div>
+              <div class="result-meta-top" style="margin-top:4px;">
+                <span class="timestamp">${timeAgo(s.created_at)}</span>
+              </div>
+            </div>
+          `;
+          sampleList.appendChild(row);
+        });
+      }
+    }
+
+    (async function init() {
+      const currentUser = await initTopbar('');
+      if (!currentUser) return;
+      await loadReport();
+    })();
+  </script>
+</body>
+</html>
